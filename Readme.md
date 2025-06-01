@@ -55,6 +55,8 @@ const char* password = "YOUR_WIFI_PASSWORD";
 const char* tg_bot_token = "YOUR_TELEGRAM_BOT_TOKEN";
 const char* tg_chat_id = "YOUR_TELEGRAM_CHAT_ID";
 
+const char *logger_url = "YOUR_LOGGER_APP_URL"
+
 #endif // CONFIG_H
 ```
 
