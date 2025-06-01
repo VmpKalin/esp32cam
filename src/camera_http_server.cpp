@@ -1,16 +1,8 @@
-#include "esp_camera.h"
-#include <WiFi.h>
-#include "esp_timer.h"
-#include "img_converters.h"
-#include "Arduino.h"
-#include "fb_gfx.h"
-#include "soc/soc.h"          // Disable brownout problems
-#include "soc/rtc_cntl_reg.h" // Disable brownout problems
-#include "esp_http_server.h"
-#include <HTTPClient.h>
-#include "config.h"
-#include <libb64/cencode.h>
-#include "telegram_utils.h"
+
+#include "camera_http_server.h"
+
+// Variable to store HTTP server
+httpd_handle_t camera_httpd = NULL;
 
 esp_err_t index_handler(httpd_req_t *req)
 {
@@ -42,7 +34,7 @@ esp_err_t stream_handler(httpd_req_t *req)
   httpd_resp_set_hdr(req, "Expires", "0");
   httpd_resp_set_hdr(req, "Connection", "close");
 
-  Serial.println("Stream requested");
+  Logger::getInstance().info("Stream requested");
 
   while (true)
   {
@@ -50,7 +42,7 @@ esp_err_t stream_handler(httpd_req_t *req)
     fb = esp_camera_fb_get();
     if (!fb)
     {
-      Serial.println("Camera frame capture failed");
+      Logger::getInstance().error("Camera frame capture failed");
       res = ESP_FAIL;
     }
     else
@@ -91,7 +83,7 @@ esp_err_t stream_handler(httpd_req_t *req)
       // Check if client disconnected
       if (res != ESP_OK)
       {
-        Serial.println("Client disconnected or streaming error");
+        Logger::getInstance().error("Client disconnected or streaming error");
         break;
       }
     }
@@ -101,27 +93,83 @@ esp_err_t stream_handler(httpd_req_t *req)
 }
 
 // Add this handler function
-esp_err_t capture_handler(httpd_req_t *req) {
-  Serial.println("Capture photo request received");
+esp_err_t capture_handler(httpd_req_t *req)
+{
+  Logger::getInstance().info("Capture photo request received");
   bool success = sendPhotoToTelegram(tg_bot_token, tg_chat_id);
-  
+
   // Return response
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-  
+
   char response[100];
-  if (success) {
+  if (success)
+  {
     snprintf(response, sizeof(response), "{\"success\":true,\"message\":\"Photo captured and sent to Telegram\"}");
-  } else {
+  }
+  else
+  {
     snprintf(response, sizeof(response), "{\"success\":false,\"message\":\"Failed to capture or send photo\"}");
   }
-  
+
   return httpd_resp_send(req, response, strlen(response));
 }
 
-esp_err_t health_handler(httpd_req_t *req) {
-    Serial.println("Health request received"); 
-    httpd_resp_set_type(req, "text/plain");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    return httpd_resp_send(req, "OK", 2);
+esp_err_t health_handler(httpd_req_t *req)
+{
+  Logger::getInstance().info("Health request received");
+  httpd_resp_set_type(req, "text/plain");
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  return httpd_resp_send(req, "OK", 2);
+}
+
+void startHttpServer()
+{
+  httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+
+  // Increase buffer size to handle larger headers
+  config.max_uri_handlers = 16;
+  config.max_resp_headers = 16;
+  config.uri_match_fn = httpd_uri_match_wildcard;
+  config.stack_size = 10240; // Increase stack size
+  config.recv_wait_timeout = 10;
+  config.send_wait_timeout = 10;
+
+  config.server_port = 80;
+
+  // Configure main page handler
+  httpd_uri_t index_uri = {
+      .uri = "/",
+      .method = HTTP_GET,
+      .handler = index_handler,
+      .user_ctx = NULL};
+
+  // Configure stream handler
+  httpd_uri_t stream_uri = {
+      .uri = "/stream",
+      .method = HTTP_GET,
+      .handler = stream_handler,
+      .user_ctx = NULL};
+
+  httpd_uri_t shot_uri = {
+      .uri = "/shot",
+      .method = HTTP_GET,
+      .handler = capture_handler,
+      .user_ctx = NULL};
+
+  httpd_uri_t health_uri = {
+      .uri = "/health",
+      .method = HTTP_GET,
+      .handler = health_handler,
+      .user_ctx = NULL};
+
+  // Start HTTP server
+  Logger::getInstance().info("Webserver start");
+  if (httpd_start(&camera_httpd, &config) == ESP_OK)
+  {
+    httpd_register_uri_handler(camera_httpd, &health_uri);
+    httpd_register_uri_handler(camera_httpd, &index_uri);
+    httpd_register_uri_handler(camera_httpd, &stream_uri);
+    httpd_register_uri_handler(camera_httpd, &shot_uri);
   }
+}

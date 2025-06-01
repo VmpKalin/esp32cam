@@ -10,8 +10,9 @@
 #include <HTTPClient.h>
 #include "config.h"
 #include <libb64/cencode.h>
-#include "camera_http_handlers.h"
+#include "camera_http_server.h"
 #include "telegram_utils.h"
+#include "logger.h"
 
 // Camera settings for ESP32-CAM AI-THINKER
 #define PWDN_GPIO_NUM 32
@@ -31,66 +32,10 @@
 #define HREF_GPIO_NUM 23
 #define PCLK_GPIO_NUM 22
 
-// Variable to store HTTP server
-httpd_handle_t camera_httpd = NULL;
-
-void startCameraServer()
-{
-  httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-
-  // Increase buffer size to handle larger headers
-  config.max_uri_handlers = 16;
-  config.max_resp_headers = 16;
-  config.uri_match_fn = httpd_uri_match_wildcard;
-  config.stack_size = 10240; // Increase stack size
-  config.recv_wait_timeout = 10;
-  config.send_wait_timeout = 10;
-  
-  // Important: increase max header size
-  // config.max_header_len = 1024; // Default is 512 bytes
-
-  config.server_port = 80;
-
-  // Configure main page handler
-  httpd_uri_t index_uri = {
-      .uri = "/",
-      .method = HTTP_GET,
-      .handler = index_handler,
-      .user_ctx = NULL};
-
-  // Configure stream handler
-  httpd_uri_t stream_uri = {
-      .uri = "/stream",
-      .method = HTTP_GET,
-      .handler = stream_handler,
-      .user_ctx = NULL};
-
-  httpd_uri_t shot_uri = {
-      .uri = "/shot",
-      .method = HTTP_GET,
-      .handler = capture_handler,
-      .user_ctx = NULL};
-
-  httpd_uri_t health_uri = {
-    .uri = "/health",
-    .method = HTTP_GET,
-    .handler = health_handler,
-    .user_ctx = NULL
-  };
-  
-  // Start HTTP server
-  Serial.println("Webserver start");
-  if (httpd_start(&camera_httpd, &config) == ESP_OK)
-  {
-    httpd_register_uri_handler(camera_httpd, &health_uri);
-    httpd_register_uri_handler(camera_httpd, &index_uri);
-    httpd_register_uri_handler(camera_httpd, &stream_uri);
-    httpd_register_uri_handler(camera_httpd, &shot_uri);
-  }
-}
-
 void setup()
 {
+  Logger::initialize(logger_url, "ESP32-CAM-01", false);
+
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); // Disable brownout detector
 
   Serial.begin(115200);
@@ -137,11 +82,11 @@ void setup()
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK)
   {
-    Serial.printf("Issue with camera initialization: 0x%x", err);
+    Logger::getInstance().error("Issue with camera initialization: 0x" + String(err, HEX));
     return;
   }
 
-  Serial.println("Camera initialized successfully");
+  Logger::getInstance().info("Camera initialized successfully");
 
   // Add camera sensor settings adjustment
   sensor_t *s = esp_camera_sensor_get();
@@ -181,7 +126,7 @@ void setup()
     // s->set_vflip(s, 1);
     // s->set_hmirror(s, 1);
 
-    Serial.println("Camera sensor settings adjusted");
+    Logger::getInstance().info("Camera sensor settings adjusted");
   }
 
   // Connect to WiFi
@@ -189,13 +134,13 @@ void setup()
   while (WiFi.status() != WL_CONNECTED)
   {
     delay(1000);
-    Serial.print(".");
+    Logger::getInstance().info(".");
   }
-  Serial.println("");
-  Serial.println("WiFi was connected");
+  Logger::getInstance().info("");
+  Logger::getInstance().info("WiFi was connected");
   // Output IP address
-  Serial.print("ESP32 Camera ip: http://");
-  Serial.println(WiFi.localIP());
+  Logger::getInstance().info("ESP32 Camera ip: http://");
+  Logger::getInstance().info("IP Address: " + WiFi.localIP().toString());
 
   delay(1000);
 
@@ -204,11 +149,11 @@ void setup()
   snprintf(ipMessage, sizeof(ipMessage), "Camera IP: http://%s", WiFi.localIP().toString().c_str());
   if (!sendMessageToTelegram(tg_bot_token, tg_chat_id, ipMessage))
   {
-    Serial.println("Failed to send Telegram message, but continuing anyway");
+    Logger::getInstance().info("Failed to send Telegram message, but continuing anyway");
   }
 
   // Start web server for streaming
-  startCameraServer();
+  startHttpServer();
 }
 
 void loop()
